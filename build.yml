@@ -1,0 +1,76 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk
+  cancel-in-progress: false
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unpack app.zip (if you uploaded one)
+        run: |
+          if [ -f app.zip ]; then
+            unzip -o -q app.zip -d .
+            rm -f app.zip
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "Unpack app.zip [skip ci]" || true
+            git push || echo "could not save unpacked files to the repo (build continues)"
+          fi
+          test -f settings.gradle || { echo "settings.gradle not found - upload app.zip first"; exit 1; }
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Get the face-detection files (free, runs on the phone)
+        run: node tools/fetch-assets.js
+
+      - name: Android SDK pieces
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" > /dev/null || true
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build the APK
+        run: gradle :app:assembleRelease -Pvcode=${{ github.run_number }} --no-daemon --stacktrace
+
+      - name: Name the APK
+        run: |
+          cp app/build/outputs/apk/release/*.apk SafeFeed.apk
+          ls -la SafeFeed.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SafeFeed-apk
+          path: SafeFeed.apk
+
+      - name: Publish on the Releases page
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Safe Feed build ${{ github.run_number }}
+          body: Download SafeFeed.apk below and install it over the old version.
+          files: SafeFeed.apk
+          make_latest: true
